@@ -82,6 +82,9 @@ exec io = liftF (ScExec io ())
 trigger :: sig a -> a -> ScriptSG sig s v ()
 trigger k x = liftF (ScTrigger k x ())
 
+checkpoint :: ScriptSG sig s v ()
+checkpoint = liftF (ScCheckpoint ())
+
 terminate :: ScriptSG sig s v a
 terminate = liftF ScTerminate
 

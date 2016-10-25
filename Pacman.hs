@@ -46,6 +46,13 @@ program :: Script Picture a
 program = do
   let v1 = pure (rectangleSolid 100 100)
   setView v1 -- show black rectangle
+  (e,v) <- fork () (ViewGuts (pure blank)) pr2
+  x <- await e
+  exec (print x)
+  x <- await e
+  exec (print x)
+  sleep 5
+  terminate
   await hmm -- test event combining
   clk <- fmap (fmap fromJust . snd) (fork () (GenGuts (+) 0) (await never)) -- test generator
   v2 <- fmap snd $ fork () (ViewGuts $ spinny <$> clk <*> pure (translate 200 200 $ rectangleSolid 100 100)) pr2
@@ -61,7 +68,17 @@ program = do
   terminate
 
 pr2 :: Script Picture a
-pr2 = hang
+pr2 = do
+  debug "pr2 start"
+  sleep 3
+  debug "wokeup"
+  checkpoint
+  checkpoint
+  checkpoint
+  debug "checkpointed"
+  sleep 3
+  debug "terminating"
+  terminate
 
 -- look at a collection of things, if some of them are not there anymore
 -- then forget their view

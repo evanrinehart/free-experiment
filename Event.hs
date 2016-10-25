@@ -30,8 +30,13 @@ trimE = fmapMaybeE id
 
 onSignal :: Keys sig => sig a -> Event sig a
 onSignal k = Event f where
-  s = SigN (toNumber k)
+  s = SigIx (toNumber k)
   f ps os = occsLookup os s
+
+-- event occurs with value Just () when the given process executes `checkpoint'
+onCheckpoint :: Pid b -> Event sig (Maybe ())
+onCheckpoint (Pid i) = Event f where
+  f ps os = occsLookup os (PidIx i)
 
 snap1 :: View a -> Event sig (a -> b) -> Event sig b
 snap1 v e = Event f where

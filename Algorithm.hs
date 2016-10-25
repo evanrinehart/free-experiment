@@ -173,14 +173,18 @@ runRunnable now pid@(Pid i) (Proc x y z) = fmap (fmap finalize) $ (go z y x) whe
       go st guts (next x)
     Free (ScTrigger k x next) -> do
       setActivityFlag
-      emitOcc (SigN (toNumber k)) x
+      emitOcc (SigIx (toNumber k)) x
+      go st guts next
+    Free (ScCheckpoint next) -> do
+      setActivityFlag
+      emitOcc (PidIx i) (Just ())
       go st guts next
     Free (ScModify f next) -> go st (f guts) next
     Free (ScFork st' guts' scr next) -> do
       setActivityFlag
       (i,v) <- newProc (Proc scr guts' st')
       setRunnable i
-      go st guts (next (never, v)) -- BROKEN
+      go st guts (next (onCheckpoint (Pid i), v))
     Free (ScGet next) -> go st guts (next st)
     Free (ScPut st' next) -> go st' guts next 
     Free (ScExec io next) -> do
@@ -192,7 +196,10 @@ runRunnable now pid@(Pid i) (Proc x y z) = fmap (fmap finalize) $ (go z y x) whe
     Free (ScAsyncIO io next) -> do
       outputAsyncRequest pid io (\ans -> Proc (next ans) guts st)
       return (Just (st, guts, scr)) -- should now be blocked
-    Free ScTerminate -> return Nothing
+    Free ScTerminate -> do
+      setActivityFlag
+      emitOcc (PidIx i) Nothing
+      return Nothing
 
 -- aux commands
 
@@ -229,7 +236,7 @@ newProc p = do
 takeCounter :: Rez sig v Int
 takeCounter = state (\(c,x,y,z,w,d,r) -> (c, (c+1,x,y,z,w,d,r)))
 
-emitOcc :: SigN sig a -> a -> Rez sig v ()
+emitOcc :: OccSrcIx sig a -> a -> Rez sig v ()
 emitOcc s v = modify (\(c,x,y,z,bag,d,r) -> (c,x,y,z,appendOccs s v bag,d,r))
 
 clearOccs :: Rez sig v ()

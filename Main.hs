@@ -68,9 +68,10 @@ core w k rt@(Rt mvIn mvOut) = do
               loop w' t') w now
         return (w',k')
     Stimulus occs@(Occs f) -> do
-      let s0 = SigN (toNumber SigCoin) :: SigN Signal ()
-      let s1 = SigN (toNumber Sig1P) :: SigN Signal ()
-      let s2 = SigN (toNumber SigControl) :: SigN Signal Ctrl
+      print (wdisp w)
+      let s0 = SigIx (toNumber SigCoin) :: OccSrcIx Signal ()
+      let s1 = SigIx (toNumber Sig1P) :: OccSrcIx Signal ()
+      let s2 = SigIx (toNumber SigControl) :: OccSrcIx Signal Ctrl
       print (f s0, f s1, f s2)
       let now = K.extract k
       let (w', out) = resolve now mvIn occs w
