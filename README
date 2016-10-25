@@ -1,0 +1,34 @@
+What we got:
+
+First decide on the input ports to the program. This will be a family of
+singletons expressed as a GADT. I'm calling these ports "signals" for now since
+they act like typed unix signals. With payloads.
+
+Your program is a process (or coroutine) which contains an implicit "viewable"
+thing that might animate with time. What can your process do.
+
+- Wait for an event, possibly with a timeout.
+- Sleep for a fixed amount of time, possibly forever.
+- Look at a view.
+- Modify your own implicit "viewable".
+- Artificially trigger a signal.
+- Execute a fire-and-forget IO action.
+- Execute an IO action and wait for the results "asynchronously".
+- Issue "checkpoints". Which are like locally generated signals.
+- Fork another process. This gives you a view and a checkpoint event.
+- Terminate.
+
+When the original process terminates the program is over. While it's running
+your driver should be able to look at the original processes "view" to get
+real time feedback on what's happening. You can interact with the simulation
+by triggering the signals yourself.
+
+Events are selections and filters of occurrences. Occurrences are generated
+by triggering signals, by checkpoints, or by the termination of processes.
+Events can also see views at the time of an occurrence. The snapshotted info
+can be incorporated into the event payload, or can be used to filter.
+
+Views are just functions of the current processes viewable values. The
+recursion here makes sense because some processes have constant values as
+their viewable, and some are generated with an isolated simulation (generators).
+
