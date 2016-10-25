@@ -2,6 +2,7 @@ module Runner where
 
 import Control.Concurrent.MVar
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 
 import View
 import Signal
@@ -48,12 +49,12 @@ nextBreakAt w = case D.minR (wdisp w) of
   Just (t,_) -> t
   Nothing -> 1 / 0
 
-setupW :: v -> s -> Script sig s v a -> W sig v
+setupW :: v -> s -> ScriptSG sig s v a -> W sig v
 setupW blank st0 prog =
   let tab0 = procTabFromList [] in
   let p0 = Proc prog (ViewGuts (pure blank)) st0 in
   let (c, pid0, tab0') = insertProc p0 0 tab0 in
-  W c pid0 tab0' D.empty
+  W c pid0 tab0' D.empty (HS.fromList [0])
 
 viewRoot :: W sig a -> Maybe a
 viewRoot w =

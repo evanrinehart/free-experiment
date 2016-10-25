@@ -53,7 +53,7 @@ startCore w k rt@(Rt mvIn mvOut) = do
 core :: W Signal Picture -> Kahan -> Runtime -> IO ()
 core w k rt@(Rt mvIn mvOut) = do
   r <- takeMVar mvIn
-  case r of
+  (w',k') <- case r of
     TimePass dt ->
       let k'   = K.accum k dt in
       let now  = K.extract k in
@@ -66,10 +66,7 @@ core w k rt@(Rt mvIn mvOut) = do
             Right (t', w', out) -> do
               out
               loop w' t') w now
-        when (rootIsGone w') $ do
-          putStrLn ("["++show (extract k)++","++show (extract k')++"]: *poof*")
-          exitSuccess
-        core w' k' rt
+        return (w',k')
     Stimulus occs@(Occs f) -> do
       let s0 = SigN (toNumber SigCoin) :: SigN Signal ()
       let s1 = SigN (toNumber Sig1P) :: SigN Signal ()
@@ -78,21 +75,25 @@ core w k rt@(Rt mvIn mvOut) = do
       let now = K.extract k
       let (w', out) = resolve now mvIn occs w
       out
-      when (rootIsGone w') $ do
-        putStrLn ("["++show (extract k)++","++show (extract k)++"]: *poof*")
-        exitSuccess
-      core w' k rt
+      return (w',k)
     RenderDump -> do
       case viewRoot w of
         Just pic -> do
           putMVar mvOut pic
-          core w k rt
+          return (w,k)
         Nothing -> do
           putStrLn "i see nothing"
           exitSuccess
     Answer f -> do
-      print "not happening"
-      core (f w) k rt
+      let w' = f w
+      let now = K.extract k
+      let (w'',out) = resolve now mvIn (Occs (const [])) w'
+      out
+      return (w'',k)
+  when (rootIsGone w') $ do
+    putStrLn ("["++show (extract k)++","++show (extract k')++"]: *poof*")
+    exitSuccess
+  core w' k' rt
 
 main = do
   mvIn <- newEmptyMVar
@@ -100,5 +101,5 @@ main = do
   let w = setupW blank () program
   let dm = InWindow "Pacman" (640,480) (0,0)
   forkIO $ do
-    playIO dm white 100 rt glshow glhandle glstep 
+    playIO dm white 200 rt glshow glhandle glstep 
   startCore w K.zero rt

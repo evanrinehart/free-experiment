@@ -9,10 +9,8 @@ import Data.Function
 import View
 import Script
 
-data Guts a = ViewGuts (View a) | GenGuts (Double -> a -> a) a
-
 data Process sig x = forall s a . Proc
-  { procScr   :: Script sig s x a
+  { procScr   :: ScriptSG sig s x a
   , procGuts  :: Guts x
   , procState :: s }
 
@@ -27,9 +25,9 @@ replaceGuts g@(GenGuts _ _) (Proc sc (GenGuts _ _) st)  = Proc sc g st
 replaceGuts _ _ = error "replaceGuts failed"
 
 -- warning!
-modifyGuts :: (a -> a) -> Guts a -> Guts a
-modifyGuts f (GenGuts g x) = GenGuts g (f x)
-modifyGuts _ _ = error "modifyGuts failed"
+--modifyGuts :: (a -> a) -> Guts a -> Guts a
+--modifyGuts f (GenGuts g x) = GenGuts g (f x)
+--modifyGuts _ _ = error "modifyGuts failed"
 
 lookAtGuts :: Guts a -> Processes -> a
 lookAtGuts (ViewGuts v) ps = runView v ps

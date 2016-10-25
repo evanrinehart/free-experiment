@@ -12,6 +12,10 @@ instance Applicative View where
   pure x = View (const x)
   View lf <*> View lx = View (lf <*> lx)
 
+instance Monoid a => Monoid (View a) where
+  mempty = pure mempty
+  View l `mappend` View r = View (l `mappend` r)
+
 viewPid :: Pid a -> View (Maybe a)
 viewPid pid = View (\l -> procsLookup l pid)
 

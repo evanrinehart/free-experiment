@@ -15,82 +15,78 @@ import Data.Maybe
 import View
 import Event
 
+data Guts a =
+  ViewGuts (View a) |
+  GenGuts (Double -> a -> a) a
+
 data ScriptF sig u v next where
-  -- these happen immediately
-  ScLook      :: View a -> (a -> next) -> ScriptF sig s v next
-  ScModify    :: (x -> x) -> next -> ScriptF sig s x next
-  ScSetView   :: View v -> next -> ScriptF sig s v next
-  ScFork1     :: s' -> (Double -> x -> x) -> x -> Script sig s' x a -> (View (Maybe x) -> next) -> ScriptF sig s v next
-  ScFork2     :: s' -> View v' -> Script sig s' v' a -> (View (Maybe v') -> next) -> ScriptF sig s v next 
-  ScTrigger   :: sig a -> a -> next -> ScriptF sig s v next
-  ScGet :: (s -> next) -> ScriptF sig s v next
-  ScPut :: s -> next -> ScriptF sig s v next
   -- these will yield
-  ScWaitFor2  :: Event sig a -> Double -> (Maybe [a] -> next) -> ScriptF sig s v next
-  ScSleep     :: Double -> next -> ScriptF sig s v next
-  ScAsyncIO   :: IO a -> (a -> next) -> ScriptF sig s v next
-  ScExec      :: IO () -> next -> ScriptF sig s v next
-  --
-  ScTerminate :: ScriptF sig s v next
+  ScAwait      :: Event sig a -> Double -> (Maybe [a] -> next) -> ScriptF sig s v next
+  ScAsyncIO    :: IO a -> (a -> next) -> ScriptF sig s v next
+  ScTerminate  :: ScriptF sig s v next
+  -- these happen immediately
+  ScLook       :: View a -> (a -> next) -> ScriptF sig s v next
+  ScGet        :: (s -> next) -> ScriptF sig s v next
+  ScPut        :: s -> next -> ScriptF sig s v next
+  ScModify     :: (Guts x -> Guts x) -> next -> ScriptF sig s x next
+  ScTrigger    :: sig a -> a -> next -> ScriptF sig s v next
+  ScCheckpoint :: next -> ScriptF sig s v next
+  ScExec       :: IO () -> next -> ScriptF sig s v next
+  ScFork       :: s
+               -> Guts v
+               -> ScriptSG sig s v b
+               -> ((Event sig (Maybe ()), View (Maybe v)) -> next)
+               -> ScriptF sig r u next
 
 deriving instance Functor (ScriptF sig s v)
 
-type Script sig s v a = Free (ScriptF sig s v) a
+type ScriptSG sig s v a = Free (ScriptF sig s v) a
 
 instance MonadState s (FreeT (ScriptF sig s v) Identity) where
   get = liftF (ScGet id)
   put x = liftF (ScPut x ())
 
-look :: View a -> Script sig s v a
+look :: View a -> ScriptSG sig s v a
 look v = liftF (ScLook v id)
 
-modifyGen :: (x -> x) -> Script sig s x ()
-modifyGen f = liftF (ScModify f ())
+modifyGuts :: (Guts a -> Guts a) -> ScriptSG sig s a ()
+modifyGuts f = liftF (ScModify f ())
 
-setView :: View v -> Script sig s v ()
-setView v = liftF (ScSetView v ())
+modifyGen :: (x -> x) -> ScriptSG sig s x ()
+modifyGen f = modifyGuts g where
+  g (ViewGuts _) = error "fix api"
+  g (GenGuts h x) = GenGuts h (f x)
 
-fork1 :: s' -> (Double -> x -> x) -> x -> Script sig s' x a -> Script sig s v (View (Maybe x))
-fork1 s f x scr = liftF (ScFork1 s f x scr id)
+setView :: View v -> ScriptSG sig s v ()
+setView v = modifyGuts (const (ViewGuts v))
 
-fork2 :: s' -> View u -> Script sig s' u a -> Script sig s v (View (Maybe u))
-fork2 s v scr = liftF (ScFork2 s v scr id)
+fork :: s -> Guts v -> ScriptSG sig s v b
+     -> ScriptSG sig r u (Event sig (Maybe ()), View (Maybe v))
+fork s guts scr = liftF (ScFork s guts scr id)
 
-await :: Event sig a -> Script sig s v [a]
-await e = liftF (ScWaitFor2 e (1/0) (id . fromJust))
+await :: Event sig a -> ScriptSG sig s v [a]
+await e = liftF (ScAwait e (1/0) (id . fromJust))
 
-timedAwait :: Event sig a -> Double -> Script sig s v (Maybe [a])
-timedAwait e dt = liftF (ScWaitFor2 e dt id)
+timedAwait :: Event sig a -> Double -> ScriptSG sig s v (Maybe [a])
+timedAwait e dt = liftF (ScAwait e dt id)
 
-sleep :: Double -> Script sig s v ()
-sleep dt = liftF (ScSleep dt ())
+sleep :: Double -> ScriptSG sig s v ()
+sleep dt = liftF (ScAwait never dt (const ()))
 
-request :: IO a -> Script sig s v a
+request :: IO a -> ScriptSG sig s v a
 request io = liftF (ScAsyncIO io id)
 
-exec :: IO () -> Script sig s v ()
+exec :: IO () -> ScriptSG sig s v ()
 exec io = liftF (ScExec io ())
 
-trigger :: sig a -> a -> Script sig s v ()
+trigger :: sig a -> a -> ScriptSG sig s v ()
 trigger k x = liftF (ScTrigger k x ())
---exec :: IO a -> Script sig v ()
 
-terminate :: Script sig s v a
+terminate :: ScriptSG sig s v a
 terminate = liftF ScTerminate
 
--- if we have a Script Picture ()
--- then we can run it by creating an empty process table
--- and empty signal table
+hang :: ScriptSG sig s v a
+hang = do
+  await never
+  terminate
 
-{-
-runScript :: TestEquality ch => Script ch a -> DMap ch -> (DSet ch, Maybe a)
-runScript prog dm = go prog dempty where
-  go p set = case runFree p of
-    Pure x -> (set, Just x)
-    Free (ScReject _) -> (set, Nothing)
-    Free (ScPunt  _) -> (set, Nothing)
-    Free (ScRead k next) ->
-      let set' = dappend k set in
-      let v = lookup k dm in
-      go (next v) set'
--}

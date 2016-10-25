@@ -21,7 +21,8 @@ data W sig a = W
   { wcounter :: Int
   , wroot    :: Pid a
   , wproctab :: ProcTab sig
-  , wdisp    :: Dispatcher }
+  , wdisp    :: Dispatcher
+  , wrunlist :: HashSet Int }
 
 data DriverAction sig a =
   TimePass Double |
@@ -42,15 +43,15 @@ instance Monoid IOUnit where
 type Rez sig v a = RWS
   (Double, MVar (DriverAction sig v), ProcTab sig)
   IOUnit
-  (Int, Int, ProcTab sig, HashSet Int, OccsBag sig, Dispatcher)
+  (Int, Bool, ProcTab sig, HashSet Int, OccsBag sig, Dispatcher, HashSet Int)
   a
 
 data ProcStatus sig b =
   Marked |
   Blocked |
   Runnable |
-  forall a s c. WaitingE (Event sig a) s (Guts b) (Maybe [a] -> Script sig s b c) |
-  forall s c . WaitingT s (Guts b) (Script sig s b c)
+  forall a s c. WaitingE (Event sig a) s (Guts b) (Maybe [a] -> ScriptSG sig s b c) |
+  forall s c . WaitingT s (Guts b) (ScriptSG sig s b c)
 
 -- given the current time, async mvar, current occurs, resolve the worlds
 -- waiting processes and return an IO action of the effects
@@ -63,13 +64,18 @@ resolve
   -> W sig v
   -> (W sig v, IO ())
 resolve now mv os0 w = (w', out) where
-  w' = w { wcounter = c', wproctab = ps', wdisp = disp' }
-  ((c', _, ps', _, _, disp'), IOUnit out) =
-    execRWS (go os0) (now, mv, ps0) (wcounter w, 0, ps0, HS.empty, HM.empty, wdisp w)
+  w' = w
+    { wcounter = c'
+    , wproctab = ps'
+    , wdisp = disp'
+    , wrunlist = runs' }
+  ((c', _, ps', _, _, disp', runs'), IOUnit out) =
+    execRWS (go os0) (now, mv, ps0)
+      (wcounter w, False, ps0, HS.empty, HM.empty, wdisp w, wrunlist w)
   ps0 = wproctab w
   go :: Occurrences sig -> Rez sig v ()
   go os = do 
-    clearOccsCount
+    clearActivityFlag
     forEachProcess $ \pid p -> do
       pv <- analyzeProc pid p
       let (Pid i) = pid
@@ -82,6 +88,7 @@ resolve now mv os0 w = (w', out) where
           case mp' of
             Just p' -> updateProc pid p'
             Nothing -> deleteProc pid
+          clearRunnable i
         WaitingT st guts next -> do
           mt <- dispLookup1 i
           case mt of
@@ -119,8 +126,8 @@ resolve now mv os0 w = (w', out) where
             Nothing -> error "sleeping process not found in records 2"
     os' <- getOccs
     clearOccs
-    c <- getOccsCount
-    when (c > 0) (go os')
+    activity <- getActivityFlag
+    when activity (go os')
 
 -- see if a proc is runnable, if its waiting for something, or if it
 -- has already woken up and gone back to sleep so we can ignore it.
@@ -131,32 +138,32 @@ analyzeProc (Pid i) p@(Proc scr guts st) = answer where
     marked <- isMarked i
     if marked
       then return Marked
-      else return (f st scr)
-  f :: forall s b . s -> Script sig s a b -> ProcStatus sig a
+      else do
+        runnable <- checkRunnable i
+        if runnable
+          then return Runnable
+          else return (f st scr)
+  f :: forall s b . s -> ScriptSG sig s a b -> ProcStatus sig a
   f st scr = case runFree scr of
-    Pure _                     -> Runnable
-    Free (ScLook _ _)          -> Runnable
-    Free (ScTrigger _ _ _)     -> Runnable
-    Free (ScModify _ _)        -> Runnable
-    Free (ScSetView _ _)       -> Runnable
-    Free (ScFork1 _ _ _ _ _)   -> Runnable
-    Free (ScFork2 _ _ _ _)     -> Runnable
-    Free (ScGet _)             -> Runnable
-    Free (ScPut _ _)           -> Runnable
-    Free (ScExec _ _)          -> Runnable
-    Free (ScWaitFor2 e _ next) -> WaitingE e st guts next
-    Free (ScSleep _ next)      -> WaitingT st guts next
+    Free (ScAwait e _ next) -> WaitingE e st guts next
     Free (ScAsyncIO _ _)       -> Blocked
-    Free ScTerminate           -> Runnable
+    _ -> error "bug 2"
+
+-- PROBLEM: the way the algorithm works is slightly convoluted. as a result
+-- forking doesnt totally work. if a process is spawned which starts with a
+-- wait command, then the next round will think that the wait has already 
+-- been executed. if its a request, the request will not be issued. if its
+-- a timed wait, it will check the dispatcher to see find it missing and
+-- crash. solution: _
 
 -- run a runnable proc. has side effects. returns the latest version of the 
 -- proc which is guaranteed to now be waiting for something, or Nothing if
 -- the process ended.
 runRunnable :: forall sig a v . Keys sig => Double -> Pid a -> Process sig a -> Rez sig v (Maybe (Process sig a))
 runRunnable now pid@(Pid i) (Proc x y z) = fmap (fmap finalize) $ (go z y x) where
-  finalize :: forall s b . (s, Guts a, Script sig s a b) -> Process sig a
+  finalize :: forall s b . (s, Guts a, ScriptSG sig s a b) -> Process sig a
   finalize (x,y,z) = Proc z y x
-  go :: forall s b . s -> Guts a -> Script sig s a b -> Rez sig v (Maybe (s, Guts a, Script sig s a b))
+  go :: forall s b . s -> Guts a -> ScriptSG sig s a b -> Rez sig v (Maybe (s, Guts a, ScriptSG sig s a b))
   go st guts scr = case runFree scr of
     Pure _ -> return Nothing
     Free (ScLook v next) -> do
@@ -165,26 +172,21 @@ runRunnable now pid@(Pid i) (Proc x y z) = fmap (fmap finalize) $ (go z y x) whe
       let x = runView v ps
       go st guts (next x)
     Free (ScTrigger k x next) -> do
-      incOccsCount 1
+      setActivityFlag
       emitOcc (SigN (toNumber k)) x
       go st guts next
-    Free (ScModify f next) -> go st (modifyGuts f guts) next
-    Free (ScSetView v next) -> go st (ViewGuts v) next
-    Free (ScFork1 st' g x scr next) -> do
-      v <- newProc (Proc scr (GenGuts g x) st')
-      go st guts (next v)
-    Free (ScFork2 st' v scr next) -> do
-      v <- newProc (Proc scr (ViewGuts v) st')
-      go st guts (next v)
+    Free (ScModify f next) -> go st (f guts) next
+    Free (ScFork st' guts' scr next) -> do
+      setActivityFlag
+      (i,v) <- newProc (Proc scr guts' st')
+      setRunnable i
+      go st guts (next (never, v)) -- BROKEN
     Free (ScGet next) -> go st guts (next st)
     Free (ScPut st' next) -> go st' guts next 
     Free (ScExec io next) -> do
       output io
       go st guts next
-    Free (ScSleep dt next) -> do
-      dispInsert i (now + dt)
-      return (Just (st, guts, scr))
-    Free (ScWaitFor2 e dt next) -> do
+    Free (ScAwait e dt next) -> do
       dispInsert i (now + dt)
       return (Just (st, guts, scr))
     Free (ScAsyncIO io next) -> do
@@ -194,53 +196,53 @@ runRunnable now pid@(Pid i) (Proc x y z) = fmap (fmap finalize) $ (go z y x) whe
 
 -- aux commands
 
-getOccsCount :: Rez sig v Int
-getOccsCount = gets (\(c,x,y,z,w,d) -> x)
+getActivityFlag :: Rez sig v Bool
+getActivityFlag = gets (\(c,x,y,z,w,d,r) -> x)
 
-incOccsCount :: Int -> Rez sig v ()
-incOccsCount n = modify (\(c,x,y,z,w,d) -> (c,x+n,y,z,w,d))
+setActivityFlag :: Rez sig v ()
+setActivityFlag = modify (\(c,_,y,z,w,d,r) -> (c,True,y,z,w,d,r))
 
-clearOccsCount :: Rez sig v ()
-clearOccsCount = modify (\(c,x,y,z,w,d) -> (c,0,y,z,w,d))
+clearActivityFlag :: Rez sig v ()
+clearActivityFlag = modify (\(c,_,y,z,w,d,r) -> (c,False,y,z,w,d,r))
 
 getCurrentProcs :: Rez sig v (ProcTab sig)
-getCurrentProcs = gets (\(c,x,y,z,w,d) -> y)
+getCurrentProcs = gets (\(c,x,y,z,w,d,r) -> y)
 
 setCurrentProcs :: ProcTab sig -> Rez sig v ()
-setCurrentProcs tab = modify (\(c,x,_,z,w,d) -> (c,x,tab,z,w,d))
+setCurrentProcs tab = modify (\(c,x,_,z,w,d,r) -> (c,x,tab,z,w,d,r))
 
 deleteProc :: Pid a -> Rez sig v ()
-deleteProc (Pid i) = modify (\(c,x,y,z,w,d) -> (c,x,HM.delete i y,z,w,d))
+deleteProc (Pid i) = modify (\(c,x,y,z,w,d,r) -> (c,x,HM.delete i y,z,w,d,r))
 
 updateProc :: Pid a -> Process sig a -> Rez sig v ()
-updateProc pid p = modify (\(c,x,y,z,w,d) -> (c,x,overwriteProc pid p y,z,w,d))
+updateProc pid p = modify (\(c,x,y,z,w,d,r) -> (c,x,overwriteProc pid p y,z,w,d,r))
 
-newProc :: Process sig a -> Rez sig v (View (Maybe a))
+newProc :: Process sig a -> Rez sig v (Int, View (Maybe a))
 newProc p = do
   c <- takeCounter
   tab <- getCurrentProcs
   let pid = Pid c
   let tab' = HM.insert c (HideProc pid p) tab
   setCurrentProcs tab'
-  return (viewPid pid)
+  return (c, viewPid pid)
   
 takeCounter :: Rez sig v Int
-takeCounter = state (\(c,x,y,z,w,d) -> (c, (c+1,x,y,z,w,d)))
+takeCounter = state (\(c,x,y,z,w,d,r) -> (c, (c+1,x,y,z,w,d,r)))
 
 emitOcc :: SigN sig a -> a -> Rez sig v ()
-emitOcc s v = modify (\(c,x,y,z,bag,d) -> (c,x,y,z,appendOccs s v bag,d))
+emitOcc s v = modify (\(c,x,y,z,bag,d,r) -> (c,x,y,z,appendOccs s v bag,d,r))
 
 clearOccs :: Rez sig v ()
-clearOccs = modify (\(c,x,y,z,bag,d) -> (c,x,y,z,HM.empty,d))
+clearOccs = modify (\(c,x,y,z,bag,d,r) -> (c,x,y,z,HM.empty,d,r))
 
 getOccs :: Rez sig v (Occurrences sig)
-getOccs = gets (compileBag . (\(c,x,y,z,w,d) -> w))
+getOccs = gets (compileBag . (\(c,x,y,z,w,d,r) -> w))
 
 markProc :: Int -> Rez sig v ()
-markProc i = modify (\(c,x,y,z,w,d) -> (c,x,y,HS.insert i z,w,d))
+markProc i = modify (\(c,x,y,z,w,d,r) -> (c,x,y,HS.insert i z,w,d,r))
 
 isMarked :: Int -> Rez sig v Bool
-isMarked i = gets (HS.member i . (\(c,x,y,z,w,d) -> z))
+isMarked i = gets (HS.member i . (\(c,x,y,z,w,d,r) -> z))
 
 output :: IO () -> Rez sig v ()
 output io = tell (IOUnit io)
@@ -253,13 +255,22 @@ outputAsyncRequest pid io handler = do
     return ()
 
 dispInsert :: Int -> Double -> Rez sig v ()
-dispInsert i t = modify (\(c,x,y,z,w,d) -> (c,x,y,z,w,D.insert i t d))
+dispInsert i t = modify (\(c,x,y,z,w,d,r) -> (c,x,y,z,w,D.insert i t d,r))
 
 dispDelete :: Int -> Rez sig v ()
-dispDelete i = modify (\(c,x,y,z,w,d) -> (c,x,y,z,w,D.deleteL i d))
+dispDelete i = modify (\(c,x,y,z,w,d,r) -> (c,x,y,z,w,D.deleteL i d,r))
 
 dispLookup1 :: Int -> Rez sig v (Maybe Double)
-dispLookup1 i = gets (\(c,x,y,z,w,d) -> D.lookupL1 i d)
+dispLookup1 i = gets (\(c,x,y,z,w,d,r) -> D.lookupL1 i d)
+
+setRunnable :: Int -> Rez sig v ()
+setRunnable i = modify (\(c,x,y,z,w,d,r) -> (c,x,y,z,w,d,HS.insert i r))
+
+clearRunnable :: Int -> Rez sig v ()
+clearRunnable i = modify (\(c,x,y,z,w,d,r) -> (c,x,y,z,w,d,HS.delete i r))
+
+checkRunnable :: Int -> Rez sig v Bool
+checkRunnable i = gets (\(c,x,y,z,w,d,r) -> HS.member i r)
 
 getCurrentTime :: Rez sig v Double
 getCurrentTime = asks (\(x,y,z) -> x)
@@ -278,8 +289,9 @@ forEachProcess f = do
 --
 
 answer :: Pid a -> Process sig a -> W sig b -> W sig b
-answer pid pr w = w' where
-  w' = w { wproctab = pt' }
+answer pid@(Pid i) pr w = w' where
+  w' = w { wproctab = pt', wrunlist = r' }
+  r' = HS.insert i (wrunlist w)
   pt' = overwriteProc pid pr (wproctab w)
 
 requestThread ::

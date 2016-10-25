@@ -16,6 +16,9 @@ instance Monoid (Event sig a) where
   mempty = Event (\_ _ -> [])
   Event f `mappend` Event g = Event (f `mappend` g)
 
+never :: Event sig a
+never = mempty
+
 fmapMaybeE :: (a -> Maybe b) -> Event sig a -> Event sig b
 fmapMaybeE f (Event g) = Event (\ps os -> catMaybes (map f (g ps os)))
 
