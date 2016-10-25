@@ -16,10 +16,10 @@ import Script
 import Pacman
 import Algorithm
 import Kahan as K
+import Process
 
-occ :: sig a -> a -> Occurrences sig
-occ k v = Occs f where
-  f _ = []
+occ :: Keys sig => sig a -> a -> Occurrences sig
+occ k v = singletonOcc k v
 
 data Runtime = Rt (MVar (DriverAction Signal Picture)) (MVar Picture)
 
@@ -70,8 +70,11 @@ core w k rt@(Rt mvIn mvOut) = do
           putStrLn ("["++show (extract k)++","++show (extract k')++"]: *poof*")
           exitSuccess
         core w' k' rt
-    Stimulus occs -> do
-      print "not happening"
+    Stimulus occs@(Occs f) -> do
+      let s0 = SigN (toNumber SigCoin) :: SigN Signal ()
+      let s1 = SigN (toNumber Sig1P) :: SigN Signal ()
+      let s2 = SigN (toNumber SigControl) :: SigN Signal Ctrl
+      print (f s0, f s1, f s2)
       let now = K.extract k
       let (w', out) = resolve now mvIn occs w
       out
@@ -97,5 +100,5 @@ main = do
   let w = setupW blank () program
   let dm = InWindow "Pacman" (640,480) (0,0)
   forkIO $ do
-    playIO dm black 100 rt glshow glhandle glstep 
+    playIO dm white 100 rt glshow glhandle glstep 
   startCore w K.zero rt
