@@ -23,6 +23,9 @@ instance Keys Signal where
 program :: Script Signal () Picture a
 program = do
   exec (putStrLn "fooooo")
+  sleep 1
+  exec (putStrLn "bbbbar")
+  sleep 5
   terminate
 
 -- look at a collection of things, if some of them are not there anymore

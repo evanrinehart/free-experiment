@@ -6,6 +6,7 @@ import Control.Concurrent.MVar
 import System.Exit
 import Data.Function
 import Control.Exception
+import Control.Monad
 
 import Data.HashMap.Strict as HM
 
@@ -47,31 +48,36 @@ startCore :: W Signal Picture -> Kahan -> Runtime -> IO ()
 startCore w k rt@(Rt mvIn mvOut) = do
   let (w', out) = resolve 0 mvIn (Occs (const [])) w
   out
-  core w k rt
+  core w' k rt
 
 core :: W Signal Picture -> Kahan -> Runtime -> IO ()
 core w k rt@(Rt mvIn mvOut) = do
---  putStrLn "core"
   r <- takeMVar mvIn
   case r of
     TimePass dt ->
-      let k' = K.accum k dt in
-      let now = K.extract k in
+      let k'   = K.accum k dt in
+      let now  = K.extract k in
       let now' = K.extract k' in
       do
         w' <- fix (\loop w t -> do
           case advanceFromTo t now' mvIn w of
-            Left w' -> return w'
+            Left w' -> do
+              return w'
             Right (t', w', out) -> do
-              print "hmm"
               out
               loop w' t') w now
+        when (rootIsGone w') $ do
+          putStrLn ("["++show (extract k)++","++show (extract k')++"]: *poof*")
+          exitSuccess
         core w' k' rt
     Stimulus occs -> do
-      putStrLn "2"
+      print "not happening"
       let now = K.extract k
       let (w', out) = resolve now mvIn occs w
       out
+      when (rootIsGone w') $ do
+        putStrLn ("["++show (extract k)++","++show (extract k)++"]: *poof*")
+        exitSuccess
       core w' k rt
     RenderDump -> do
       case viewRoot w of
@@ -82,7 +88,7 @@ core w k rt@(Rt mvIn mvOut) = do
           putStrLn "i see nothing"
           exitSuccess
     Answer f -> do
-      putStrLn "answer"
+      print "not happening"
       core (f w) k rt
 
 main = do
