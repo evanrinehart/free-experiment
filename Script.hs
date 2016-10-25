@@ -10,6 +10,7 @@ import Control.Monad.Trans.Free
 import Control.Monad.State
 import Control.Monad.Identity
 import Prelude hiding (lookup)
+import Data.Maybe
 
 import View
 import Event
@@ -25,7 +26,6 @@ data ScriptF sig u v next where
   ScGet :: (s -> next) -> ScriptF sig s v next
   ScPut :: s -> next -> ScriptF sig s v next
   -- these will yield
-  ScWaitFor1  :: Event sig a -> ([a] -> next) -> ScriptF sig s v next
   ScWaitFor2  :: Event sig a -> Double -> (Maybe [a] -> next) -> ScriptF sig s v next
   ScSleep     :: Double -> next -> ScriptF sig s v next
   ScAsyncIO   :: IO a -> (a -> next) -> ScriptF sig s v next
@@ -57,7 +57,7 @@ fork2 :: s' -> View u -> Script sig s' u a -> Script sig s v (View (Maybe u))
 fork2 s v scr = liftF (ScFork2 s v scr id)
 
 await :: Event sig a -> Script sig s v [a]
-await e = liftF (ScWaitFor1 e id)
+await e = liftF (ScWaitFor2 e (1/0) (id . fromJust))
 
 timedAwait :: Event sig a -> Double -> Script sig s v (Maybe [a])
 timedAwait e dt = liftF (ScWaitFor2 e dt id)
