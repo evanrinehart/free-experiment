@@ -17,5 +17,5 @@ instance Monoid a => Monoid (View a) where
   View l `mappend` View r = View (l `mappend` r)
 
 viewPid :: Pid a -> View (Maybe a)
-viewPid pid = View (\l -> procsLookup l pid)
+viewPid pid = View (\ps -> procsLookup ps pid)
 

@@ -15,25 +15,24 @@ import View
 data Ctrl = CtrlLeft | CtrlRight | CtrlUp | CtrlDown
   deriving (Show)
 
-data Signal a where
-  SigControl :: Signal Ctrl
-  Sig1P      :: Signal ()
-  SigCoin    :: Signal ()
-  -- Collision
-  -- ScreenChange
-
-instance Keys Signal where
-  toNumber s = case s of
-    SigControl -> 0
-    Sig1P      -> 1
-    SigCoin    -> 2
-
-type ScriptS s v a = ScriptSG Signal s v a
-type Script v a = ScriptS () v a
-
 debug :: String -> Script v ()
 debug = exec . putStrLn
 
+program :: Event () -> Script Picture a
+program coin = do
+  await coin
+  (p,e) <- newPort
+  fork () (ViewGuts (pure ())) (satellite p)
+  await e
+  terminate
+
+satellite :: Port Int -> Script () a
+satellite out = do
+  sleep 2
+  trigger out 9
+  hang
+
+{-
 ctrl = onSignal SigControl
 onL = fmapMaybeE (\case CtrlLeft  -> Just (); _ -> Nothing) ctrl
 onR = fmapMaybeE (\case CtrlRight -> Just (); _ -> Nothing) ctrl
@@ -42,17 +41,47 @@ hmm = onL <> onR <> mempty
 spinny :: Double -> Picture -> Picture
 spinny t pic = rotate (realToFrac (t*50)) pic
 
+type EntTempl a b = (Guts a, Script a b)
+type ScriptV a = ScriptS (View Picture) Picture a
+
+spawn :: EntTempl Picture b -> ScriptV (Event ())
+spawn (guts,scr) = do
+  accum <- get
+  (e, v) <- fork () guts scr
+  let accum' = accum <> fmap (fromMaybe blank) v
+  setView accum'
+  put accum'
+  return (fmap (const ()) e)
+
+cue :: Ent Picture b -> Bool -> String -> ScriptV ()
+cue ent temp msg = do
+  e <- spawn ent
+  spawn (banner (runTemp e never temp) msg)
+  await (eitherE onStartGame e) >>= \case 
+    Left _  -> terminate -- game is starting
+    Right _ -> return ()
+
+data Temp = Temp | Stay
+runTemp :: a -> a -> Temp -> a
+runTemp x y Temp = x
+runTemp x y Stay = y
+
+titleScreen :: ScriptV ()
+titleScreen = do
+  ready <- spawn bannerBox
+  await ready
+  cue (ghost 1) Temp "starring red ghost"
+  cue (ghost 2) Temp "pink ghost"
+  cue (ghost 3) Temp "cyan ghost"
+  cue (ghost 4) Temp "orange ghost"
+  cue mspacman  Stay "starring ms pacman"
+  sleep 10
+  -- title screen ends
+
 program :: Script Picture a
 program = do
   let v1 = pure (rectangleSolid 100 100)
   setView v1 -- show black rectangle
-  (e,v) <- fork () (ViewGuts (pure blank)) pr2
-  x <- await e
-  exec (print x)
-  x <- await e
-  exec (print x)
-  sleep 5
-  terminate
   await hmm -- test event combining
   clk <- fmap (fmap fromJust . snd) (fork () (GenGuts (+) 0) (await never)) -- test generator
   v2 <- fmap snd $ fork () (ViewGuts $ spinny <$> clk <*> pure (translate 200 200 $ rectangleSolid 100 100)) pr2
@@ -79,6 +108,7 @@ pr2 = do
   sleep 3
   debug "terminating"
   terminate
+-}
 
 -- look at a collection of things, if some of them are not there anymore
 -- then forget their view

@@ -18,25 +18,25 @@ import Algorithm
 import Kahan as K
 import Process
 
-occ :: Keys sig => sig a -> a -> Occurrences sig
+occ :: Port a -> a -> Occurrences
 occ k v = singletonOcc k v
 
-data Runtime = Rt (MVar (DriverAction Signal Picture)) (MVar Picture)
+data Runtime = Rt (MVar (DriverAction Picture)) (MVar Picture)
 
 glshow :: Runtime -> IO Picture
 glshow (Rt mvIn mvOut) = do
   putMVar mvIn RenderDump
   takeMVar mvOut
 
-glhandle :: Event -> Runtime -> IO Runtime
-glhandle e rt@(Rt mvIn _) = go >> return rt where
+glhandle :: Port () -> Port () -> Port Ctrl -> Event -> Runtime -> IO Runtime
+glhandle p1 p2 p3 e rt@(Rt mvIn _) = go >> return rt where
   go = case e of
-    EventKey (Char 'a') Down _ _ -> putMVar mvIn (Stimulus $ occ SigControl CtrlLeft)
-    EventKey (Char 's') Down _ _ -> putMVar mvIn (Stimulus $ occ SigControl CtrlDown)
-    EventKey (Char 'd') Down _ _ -> putMVar mvIn (Stimulus $ occ SigControl CtrlRight)
-    EventKey (Char 'w') Down _ _ -> putMVar mvIn (Stimulus $ occ SigControl CtrlUp)
-    EventKey (Char 'c') Down _ _ -> putMVar mvIn (Stimulus $ occ SigCoin ())
-    EventKey (SpecialKey KeyEnter) Down _ _ -> putMVar mvIn (Stimulus $ occ Sig1P ())
+    EventKey (Char 'a') Down _ _ -> putMVar mvIn (Stimulus $ occ p3 CtrlLeft)
+    EventKey (Char 's') Down _ _ -> putMVar mvIn (Stimulus $ occ p3 CtrlDown)
+    EventKey (Char 'd') Down _ _ -> putMVar mvIn (Stimulus $ occ p3 CtrlRight)
+    EventKey (Char 'w') Down _ _ -> putMVar mvIn (Stimulus $ occ p3 CtrlUp)
+    EventKey (Char 'c') Down _ _ -> putMVar mvIn (Stimulus $ occ p2 ())
+    EventKey (SpecialKey KeyEnter) Down _ _ -> putMVar mvIn (Stimulus $ occ p1 ())
     _ -> return ()
 
 glstep :: Float -> Runtime -> IO Runtime
@@ -44,13 +44,13 @@ glstep dt rt@(Rt mvIn mvOut) = do
   putMVar mvIn (TimePass (realToFrac dt))
   return rt
 
-startCore :: W Signal Picture -> Kahan -> Runtime -> IO ()
+startCore :: W Picture -> Kahan -> Runtime -> IO ()
 startCore w k rt@(Rt mvIn mvOut) = do
   let (w', out) = resolve 0 mvIn (Occs (const [])) w
   out
   core w' k rt
 
-core :: W Signal Picture -> Kahan -> Runtime -> IO ()
+core :: W Picture -> Kahan -> Runtime -> IO ()
 core w k rt@(Rt mvIn mvOut) = do
   r <- takeMVar mvIn
   (w',k') <- case r of
@@ -68,11 +68,6 @@ core w k rt@(Rt mvIn mvOut) = do
               loop w' t') w now
         return (w',k')
     Stimulus occs@(Occs f) -> do
-      print (wdisp w)
-      let s0 = SigIx (toNumber SigCoin) :: OccSrcIx Signal ()
-      let s1 = SigIx (toNumber Sig1P) :: OccSrcIx Signal ()
-      let s2 = SigIx (toNumber SigControl) :: OccSrcIx Signal Ctrl
-      print (f s0, f s1, f s2)
       let now = K.extract k
       let (w', out) = resolve now mvIn occs w
       out
@@ -99,8 +94,11 @@ core w k rt@(Rt mvIn mvOut) = do
 main = do
   mvIn <- newEmptyMVar
   rt <- Rt mvIn <$> newEmptyMVar
-  let w = setupW blank () program
   let dm = InWindow "Pacman" (640,480) (0,0)
+  (p1,_) <- newExternalPort
+  (p2,coin) <- newExternalPort
+  (p3,_) <- newExternalPort
+  let w = setupW blank () (program coin)
   forkIO $ do
-    playIO dm white 200 rt glshow glhandle glstep 
+    playIO dm white 200 rt glshow (glhandle p1 p2 p3) glstep 
   startCore w K.zero rt

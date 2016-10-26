@@ -9,17 +9,16 @@ import Data.Function
 import View
 import Script
 
-data Process sig x = forall s a . Proc
-  { procScr   :: ScriptSG sig s x a
+data Process x = forall s a . Proc
+  { procScr   :: ScriptS s x a
   , procGuts  :: Guts x
   , procState :: s }
 
-data HideProc sig = forall a . HideProc (Pid a) (Process sig a)
-
-type ProcTab sig = HashMap Int (HideProc sig)
+data HideProc = forall a . HideProc (Pid a) (Process a)
+type ProcTab = HashMap Int HideProc
 
 -- warning!
-replaceGuts :: Guts a -> Process sig a -> Process sig a
+replaceGuts :: Guts a -> Process a -> Process a
 replaceGuts g@(ViewGuts _)  (Proc sc (ViewGuts _) st) = Proc sc g st
 replaceGuts g@(GenGuts _ _) (Proc sc (GenGuts _ _) st)  = Proc sc g st
 replaceGuts _ _ = error "replaceGuts failed"
@@ -33,7 +32,7 @@ lookAtGuts :: Guts a -> Processes -> a
 lookAtGuts (ViewGuts v) ps = runView v ps
 lookAtGuts (GenGuts _ x) ps = x
 
-lookupProc :: HashMap Int (HideProc sig) -> Pid a -> Maybe (Process sig a)
+lookupProc :: HashMap Int HideProc -> Pid a -> Maybe (Process a)
 lookupProc hm (Pid i) = case HM.lookup i hm of
   Just (HideProc _ p) -> Just (unsafeCoerce p)
   Nothing -> Nothing
@@ -42,7 +41,7 @@ lookupProc hm (Pid i) = case HM.lookup i hm of
 -- to look at a view, I need to look at processes
 -- to look at processes, I need to look at views.
 -- everything works as long as everything is based on generators (no cycles)
-viewEquation :: ProcTab sig -> Processes -> Processes
+viewEquation :: ProcTab -> Processes -> Processes
 viewEquation tab ps = Procs f where
   f :: Pid a -> Maybe a
   f pid = case lookupProc tab pid of
@@ -50,28 +49,28 @@ viewEquation tab ps = Procs f where
     Just p -> Just (lookAtGuts (procGuts p) ps)
 
 -- tie the knot
-viewFixedPoint :: ProcTab sig -> Processes
+viewFixedPoint :: ProcTab -> Processes
 viewFixedPoint tab = fix (viewEquation tab)
 
 insertProc ::
-  Process sig a ->
+  Process a ->
   Int ->
-  ProcTab sig ->
-  (Int, Pid a, ProcTab sig)
+  ProcTab ->
+  (Int, Pid a, ProcTab)
 insertProc p counter hm = (counter+1, pid, hm') where
   pid = Pid counter
   hm' = HM.insert counter (HideProc pid p) hm
 
 overwriteProc ::
   Pid a ->
-  Process sig a ->
-  ProcTab sig ->
-  ProcTab sig
+  Process a ->
+  ProcTab ->
+  ProcTab
 overwriteProc pid@(Pid i) pr' hm = HM.insert i (HideProc pid pr') hm
 
-eachProc :: ProcTab sig -> (forall a . Pid a -> Process sig a -> b) -> [b]
+eachProc :: ProcTab -> (forall a . Pid a -> Process a -> b) -> [b]
 eachProc ps f = map g (HM.toList ps) where
   g (_,HideProc pid p) = f pid p 
 
-procTabFromList :: [(Int, HideProc sig)] -> ProcTab sig
+procTabFromList :: [(Int, HideProc)] -> ProcTab
 procTabFromList = HM.fromList
