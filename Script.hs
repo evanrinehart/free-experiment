@@ -16,85 +16,77 @@ import View
 import Event
 import Signal
 
-data Guts a =
-  ViewGuts (View a) |
-  GenGuts (Double -> a -> a) a
+data Guts a = Guts a (Double -> a -> a)
 
-data ScriptF s v next where
+data ScriptF v next where
   -- these will yield
-  ScAwait      :: Event a -> Double -> (Maybe [a] -> next) -> ScriptF s v next
-  ScAsyncIO    :: IO a -> (a -> next) -> ScriptF s v next
-  ScTerminate  :: ScriptF s v next
+  ScAwait      :: Event a -> Double -> (Maybe [a] -> next) -> ScriptF v next
+  ScAsyncIO    :: IO a -> (a -> next) -> ScriptF v next
+  ScTerminate  :: ScriptF v next
   -- these happen immediately
-  ScLook       :: View a -> (a -> next) -> ScriptF s v next
-  ScGet        :: (s -> next) -> ScriptF s v next
-  ScPut        :: s -> next -> ScriptF s v next
-  ScModify     :: (Guts x -> Guts x) -> next -> ScriptF s x next
-  ScTrigger    :: Port a -> a -> next -> ScriptF s v next
-  ScCheckpoint :: next -> ScriptF s v next
-  ScExec       :: IO () -> next -> ScriptF s v next
-  ScNewPort    :: ((Port a, Event a) -> next) -> ScriptF s v next
-  ScFork       :: s
-               -> Guts v
-               -> ScriptS s v b
+  ScLook       :: View a -> (a -> next) -> ScriptF v next
+  ScGuts       :: (Guts x -> (a, Guts x)) -> (a -> next) -> ScriptF x next
+  ScTrigger    :: Port a -> a -> next -> ScriptF v next
+  ScCheckpoint :: next -> ScriptF v next
+  ScExec       :: IO () -> next -> ScriptF v next
+  ScNewPort    :: ((Port a, Event a) -> next) -> ScriptF v next
+  ScFork       :: Guts v
+               -> Script v b
                -> ((Event (Maybe ()), View (Maybe v)) -> next)
-               -> ScriptF r u next
+               -> ScriptF u next
 
-deriving instance Functor (ScriptF s v)
+deriving instance Functor (ScriptF v)
 
-type ScriptS s v a = Free (ScriptF s v) a
-type Script v a = ScriptS () v a
+type Script v a = Free (ScriptF v) a
 
-instance MonadState s (FreeT (ScriptF s v) Identity) where
-  get = liftF (ScGet id)
-  put x = liftF (ScPut x ())
+instance MonadState v (FreeT (ScriptF v) Identity) where
+  get = liftF (ScGuts f id) where
+    f guts@(Guts x g) = (x, guts)
+  put x' = liftF (ScGuts (\(Guts x g) -> ((), Guts x' g)) id) where
 
-look :: View a -> ScriptS s v a
+look :: View a -> Script v a
 look v = liftF (ScLook v id)
 
-modifyGuts :: (Guts a -> Guts a) -> ScriptS s a ()
-modifyGuts f = liftF (ScModify f ())
+getGuts :: Script v (Guts v)
+getGuts = liftF (ScGuts (\s -> (s,s)) id)
 
-modifyGen :: (x -> x) -> ScriptS s x ()
-modifyGen f = modifyGuts g where
-  g (ViewGuts _) = error "fix api"
-  g (GenGuts h x) = GenGuts h (f x)
+putGuts :: Guts v -> Script v ()
+putGuts guts = liftF (ScGuts (\_ -> ((),guts)) id)
 
-setView :: View v -> ScriptS s v ()
-setView v = modifyGuts (const (ViewGuts v))
+modifyGuts :: (Guts a -> Guts a) -> Script a ()
+modifyGuts f = (fmap f getGuts) >>= putGuts 
 
-fork :: s -> Guts v -> ScriptS s v b
-     -> ScriptS r u (Event (Maybe ()), View (Maybe v))
-fork s guts scr = liftF (ScFork s guts scr id)
+fork :: Guts v -> Script v b -> Script u (Event (Maybe ()), View (Maybe v))
+fork guts scr = liftF (ScFork guts scr id)
 
-await :: Event a -> ScriptS s v [a]
+await :: Event a -> Script v [a]
 await e = liftF (ScAwait e (1/0) (id . fromJust))
 
-timedAwait :: Event a -> Double -> ScriptS s v (Maybe [a])
+timedAwait :: Event a -> Double -> Script v (Maybe [a])
 timedAwait e dt = liftF (ScAwait e dt id)
 
-sleep :: Double -> ScriptS s v ()
+sleep :: Double -> Script v ()
 sleep dt = liftF (ScAwait never dt (const ()))
 
-request :: IO a -> ScriptS s v a
+request :: IO a -> Script v a
 request io = liftF (ScAsyncIO io id)
 
-exec :: IO () -> ScriptS s v ()
+exec :: IO () -> Script v ()
 exec io = liftF (ScExec io ())
 
-trigger :: Port a -> a -> ScriptS s v ()
+trigger :: Port a -> a -> Script v ()
 trigger k x = liftF (ScTrigger k x ())
 
-newPort :: ScriptS s v (Port a, Event a)
+newPort :: Script v (Port a, Event a)
 newPort = liftF (ScNewPort id)
 
-checkpoint :: ScriptS s v ()
+checkpoint :: Script v ()
 checkpoint = liftF (ScCheckpoint ())
 
-terminate :: ScriptS s v a
+terminate :: Script v a
 terminate = liftF ScTerminate
 
-hang :: ScriptS s v a
+hang :: Script v a
 hang = do
   await never
   terminate

@@ -24,9 +24,8 @@ advanceRaw dt w = w { wproctab = tab' } where
   tab = wproctab w
   ps = viewFixedPoint tab
   tab' = HM.mapWithKey f tab
-  f i orig@(HideProc pid (Proc scr guts st)) = case guts of
-    GenGuts g x -> HideProc pid (Proc scr (GenGuts g (g dt x)) st)
-    _ -> orig
+  f i orig@(HideProc pid (Proc scr guts)) = case guts of
+    Guts x g -> HideProc pid (Proc scr (Guts (g dt x) g))
 
 advanceFromTo
   :: Double
@@ -50,10 +49,10 @@ nextBreakAt w = case D.minR (wdisp w) of
   Just (t,_) -> t
   Nothing -> 1 / 0
 
-setupW :: v -> s -> ScriptS s v a -> W v
-setupW blank st0 prog =
+setupW :: v -> Script v a -> W v
+setupW blank prog =
   let tab0 = procTabFromList [] in
-  let p0 = Proc prog (ViewGuts (pure blank)) st0 in
+  let p0 = Proc prog (Guts blank (const id)) in
   let (c, pid0, tab0') = insertProc p0 0 tab0 in
   W c pid0 tab0' D.empty (HS.fromList [0])
 

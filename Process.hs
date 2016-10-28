@@ -10,18 +10,18 @@ import View
 import Script
 
 data Process x = forall s a . Proc
-  { procScr   :: ScriptS s x a
+  { procScr   :: Script x a
   , procGuts  :: Guts x
-  , procState :: s }
+  }
 
 data HideProc = forall a . HideProc (Pid a) (Process a)
 type ProcTab = HashMap Int HideProc
 
 -- warning!
-replaceGuts :: Guts a -> Process a -> Process a
-replaceGuts g@(ViewGuts _)  (Proc sc (ViewGuts _) st) = Proc sc g st
-replaceGuts g@(GenGuts _ _) (Proc sc (GenGuts _ _) st)  = Proc sc g st
-replaceGuts _ _ = error "replaceGuts failed"
+--replaceGuts :: Guts a -> Process a -> Process a
+--replaceGuts g@(ViewGuts _) (Proc sc (ViewGuts _) st) = Proc sc g st
+--replaceGuts g@(GenGuts _ _) (Proc sc (GenGuts _ _) st)  = Proc sc g st
+--replaceGuts _ _ = error "replaceGuts failed"
 
 -- warning!
 --modifyGuts :: (a -> a) -> Guts a -> Guts a
@@ -29,8 +29,7 @@ replaceGuts _ _ = error "replaceGuts failed"
 --modifyGuts _ _ = error "modifyGuts failed"
 
 lookAtGuts :: Guts a -> Processes -> a
-lookAtGuts (ViewGuts v) ps = runView v ps
-lookAtGuts (GenGuts _ x) ps = x
+lookAtGuts (Guts x _) _ = x
 
 lookupProc :: HashMap Int HideProc -> Pid a -> Maybe (Process a)
 lookupProc hm (Pid i) = case HM.lookup i hm of

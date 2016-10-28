@@ -50,8 +50,8 @@ data ProcStatus b =
   Marked |
   Blocked |
   Runnable |
-  forall a s c. WaitingE (Event a) s (Guts b) (Maybe [a] -> ScriptS s b c) |
-  forall s c . WaitingT s (Guts b) (ScriptS s b c)
+  forall a c. WaitingE (Event a) (Guts b) (Maybe [a] -> Script b c) |
+  forall c . WaitingT (Guts b) (Script b c)
 
 -- given the current time, async mvar, current occurs, resolve the worlds
 -- waiting processes and return an IO action of the effects
@@ -87,27 +87,27 @@ resolve now mv os0 w = (w', out) where
             Just p' -> updateProc pid p'
             Nothing -> deleteProc pid
           clearRunnable i
-        WaitingT st guts next -> do
+        WaitingT guts next -> do
           mt <- dispLookup1 i
           case mt of
             Just t -> if t == now
               then do
                 markProc i
                 dispDelete i
-                mp' <- runRunnable now pid (Proc next guts st)
+                mp' <- runRunnable now pid (Proc next guts)
                 case mp' of
                   Just p' -> updateProc pid p'
                   Nothing -> deleteProc pid
               else return ()
             Nothing -> error "sleeping process not found in records 1"
-        WaitingE e st guts h -> do
+        WaitingE e guts h -> do
           mt <- dispLookup1 i
           case mt of
             Just t -> if t == now
               then do
                 markProc i
                 dispDelete i
-                mp' <- runRunnable now pid (Proc (h Nothing) guts st)
+                mp' <- runRunnable now pid (Proc (h Nothing) guts)
                 case mp' of
                   Just p' -> updateProc pid p'
                   Nothing -> deleteProc pid
@@ -117,7 +117,7 @@ resolve now mv os0 w = (w', out) where
                   [] -> return ()
                   xs -> do
                     markProc i
-                    mp' <- runRunnable now pid (Proc (h (Just xs)) guts st)
+                    mp' <- runRunnable now pid (Proc (h (Just xs)) guts)
                     case mp' of
                       Just p' -> updateProc pid p'
                       Nothing -> deleteProc pid
@@ -130,7 +130,7 @@ resolve now mv os0 w = (w', out) where
 -- see if a proc is runnable, if its waiting for something, or if it
 -- has already woken up and gone back to sleep so we can ignore it.
 analyzeProc :: forall a v . Pid a -> Process a -> Rez v (ProcStatus a)
-analyzeProc (Pid i) p@(Proc scr guts st) = answer where
+analyzeProc (Pid i) p@(Proc scr guts) = answer where
   answer :: Rez v (ProcStatus a)
   answer = do
     marked <- isMarked i
@@ -140,10 +140,10 @@ analyzeProc (Pid i) p@(Proc scr guts st) = answer where
         runnable <- checkRunnable i
         if runnable
           then return Runnable
-          else return (f st scr)
-  f :: forall s b . s -> ScriptS s a b -> ProcStatus a
-  f st scr = case runFree scr of
-    Free (ScAwait e _ next) -> WaitingE e st guts next
+          else return (f scr)
+  f :: forall b . Script a b -> ProcStatus a
+  f scr = case runFree scr of
+    Free (ScAwait e _ next) -> WaitingE e guts next
     Free (ScAsyncIO _ _)       -> Blocked
     _ -> error "bug 2"
 
@@ -158,46 +158,44 @@ analyzeProc (Pid i) p@(Proc scr guts st) = answer where
 -- proc which is guaranteed to now be waiting for something, or Nothing if
 -- the process ended.
 runRunnable :: forall a v . Double -> Pid a -> Process a -> Rez v (Maybe (Process a))
-runRunnable now pid@(Pid i) (Proc x y z) = fmap (fmap finalize) $ (go z y x) where
-  finalize :: forall s b . (s, Guts a, ScriptS s a b) -> Process a
-  finalize (x,y,z) = Proc z y x
-  go :: forall s b . s -> Guts a -> ScriptS s a b -> Rez v (Maybe (s, Guts a, ScriptS s a b))
-  go st guts scr = case runFree scr of
+runRunnable now pid@(Pid i) (Proc scr0 guts0) = fmap (fmap finalize) (go scr0 guts0) where
+  finalize (x,y) = Proc x y
+  go scr guts = case runFree scr of
     Pure _ -> return Nothing
     Free (ScLook v next) -> do
       tab <- getOriginalProcs
       let ps = viewFixedPoint tab
       let x = runView v ps
-      go st guts (next x)
+      go (next x) guts
     Free (ScTrigger port x next) -> do
       setActivityFlag
       emitOcc port x
-      go st guts next
+      go next guts
     Free (ScCheckpoint next) -> do
       setActivityFlag
       emitOcc (IntPort i) (Just ())
-      go st guts next
+      go next guts
     Free (ScNewPort next) -> do
       i <- takeCounter
       let port = IntPort i
-      go st guts (next (port, onPort port))
-    Free (ScModify f next) -> go st (f guts) next
-    Free (ScFork st' guts' scr next) -> do
-      (i,v) <- newProc (Proc scr guts' st')
+      go (next (port, onPort port)) guts
+    Free (ScGuts f next) ->
+      let (x, guts') = f guts in
+      go (next x) guts'
+    Free (ScFork guts' scr next) -> do
+      (i,v) <- newProc (Proc scr guts')
       setRunnable i
       setActivityFlag
-      go st guts (next (onCheckpoint (Pid i), v))
-    Free (ScGet next) -> go st guts (next st)
-    Free (ScPut st' next) -> go st' guts next 
+      go (next (onCheckpoint (Pid i), v)) guts
     Free (ScExec io next) -> do
       output io
-      go st guts next
+      go next guts
     Free (ScAwait e dt next) -> do
       dispInsert i (now + dt)
-      return (Just (st, guts, scr))
+      return (Just (scr, guts))
     Free (ScAsyncIO io next) -> do
-      outputAsyncRequest pid io (\ans -> Proc (next ans) guts st)
-      return (Just (st, guts, scr)) -- should now be blocked
+      outputAsyncRequest pid io (\ans -> Proc (next ans) guts)
+      return (Just (scr, guts)) -- should now be blocked
     Free ScTerminate -> do
       setActivityFlag
       emitOcc (IntPort i) Nothing

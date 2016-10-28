@@ -22,7 +22,7 @@ program :: Event () -> Script Picture a
 program coin = do
   await coin
   (p,e) <- newPort
-  fork () (ViewGuts (pure ())) (satellite p)
+  fork (Guts () (const id)) (satellite p)
   await e
   terminate
 

@@ -98,7 +98,7 @@ main = do
   (p1,_) <- newExternalPort
   (p2,coin) <- newExternalPort
   (p3,_) <- newExternalPort
-  let w = setupW blank () (program coin)
+  let w = setupW blank (program coin)
   forkIO $ do
     playIO dm white 200 rt glshow (glhandle p1 p2 p3) glstep 
   startCore w K.zero rt
